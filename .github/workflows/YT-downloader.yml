@@ -1,0 +1,221 @@
+name: 01- 🎬 Youtube Downloader 
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: 'YouTube video URL'
+        required: true
+        type: string
+      quality:
+        description: 'Video quality (best, 1080, 720, 480, audio)'
+        required: false
+        default: 'best'
+        type: string
+      split_threshold_mb:
+        description: 'Split files larger than this MB (0 = never split)'
+        required: false
+        default: '90'
+        type: string
+
+jobs:
+  download-youtube:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Start WARP Container
+        run: |
+          echo "🚀 Starting Cloudflare WARP container..."
+
+          # Create docker network
+          docker network create warp-net || true
+
+          # Run WARP container
+          docker run -d \
+            --name warp \
+            --restart=always \
+            --network warp-net \
+            -p 1080:1080 \
+            --cap-add NET_ADMIN \
+            --sysctl net.ipv6.conf.all.disable_ipv6=0 \
+            --sysctl net.ipv4.conf.all.src_valid_mark=1 \
+            -v warp-data:/var/lib/cloudflare-warp \
+            caomingjun/warp
+
+          echo "⏳ Waiting for WARP to initialize (30 seconds)..."
+          sleep 30
+
+          # Check WARP status
+          echo "🔍 Checking WARP status..."
+          for i in {1..10}; do
+            RESULT=$(curl -s --max-time 10 --socks5-hostname 127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace 2>/dev/null || echo "failed")
+            if echo "$RESULT" | grep -qE "warp=(on|plus)"; then
+              echo "✅ WARP is active!"
+              echo "$RESULT"
+              break
+            else
+              echo "⏳ Attempt $i/10 - WARP not ready yet, waiting..."
+              sleep 10
+            fi
+          done
+
+          # Final check
+          FINAL=$(curl -s --max-time 10 --socks5-hostname 127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace 2>/dev/null || echo "failed")
+          if echo "$FINAL" | grep -qE "warp=(on|plus)"; then
+            echo "✅ WARP proxy is ready!"
+          else
+            echo "⚠️ WARP might not be fully active, but continuing anyway..."
+            echo "Response: $FINAL"
+          fi
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip ffmpeg zip curl jq
+          pip3 install --upgrade yt-dlp
+
+      - name: Download YouTube Video
+        run: |
+          URL="${{ github.event.inputs.youtube_url }}"
+          QUALITY="${{ github.event.inputs.quality }}"
+          SPLIT_MB="${{ github.event.inputs.split_threshold_mb }}"
+          SPLIT_BYTES=$(( SPLIT_MB * 1024 * 1024 ))
+
+          mkdir -p videos tmp_downloads
+
+          echo ""
+          echo "📹 Downloading: $URL"
+          echo "📊 Quality: $QUALITY"
+
+          # Set format based on quality
+          case "$QUALITY" in
+            "audio")
+              FORMAT="bestaudio"
+              ;;
+            "best")
+              FORMAT="bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+              ;;
+            "1080")
+              FORMAT="bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best"
+              ;;
+            "720")
+              FORMAT="bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
+              ;;
+            "480")
+              FORMAT="bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best"
+              ;;
+            *)
+              FORMAT="bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+              ;;
+          esac
+
+          # Download through WARP SOCKS5 proxy
+          yt-dlp \
+            --proxy "socks5://127.0.0.1:1080" \
+            --format "$FORMAT" \
+            --merge-output-format mp4 \
+            --output "tmp_downloads/%(title)s.%(ext)s" \
+            --no-playlist \
+            --retries 10 \
+            --fragment-retries 10 \
+            --concurrent-fragments 4 \
+            --no-check-certificates \
+            --prefer-free-formats \
+            --no-warnings \
+            "$URL" || {
+              echo "❌ yt-dlp failed, trying alternative method..."
+
+              # Try with different user agent
+              yt-dlp \
+                --proxy "socks5://127.0.0.1:1080" \
+                --format "$FORMAT" \
+                --merge-output-format mp4 \
+                --output "tmp_downloads/%(title)s.%(ext)s" \
+                --no-playlist \
+                --retries 10 \
+                --fragment-retries 10 \
+                --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+                --extractor-args "youtube:player_client=android" \
+                "$URL"
+            }
+
+          echo "✅ Download complete!"
+          ls -la tmp_downloads/
+
+          # Handle file splitting
+          for FILE in tmp_downloads/*; do
+            [ -f "$FILE" ] || continue
+            SIZE=$(stat -c%s "$FILE")
+            BASENAME=$(basename "$FILE")
+
+            echo "📁 Processing: $BASENAME ($(( SIZE / 1024 / 1024 ))MB)"
+
+            if [ "$SPLIT_BYTES" -gt 0 ] && [ "$SIZE" -gt "$SPLIT_BYTES" ]; then
+              echo "✂️ Splitting $BASENAME into ${SPLIT_MB}MB parts..."
+              zip -0 -s "${SPLIT_MB}m" "videos/${BASENAME}.zip" -j "$FILE"
+              echo "✅ Created $(ls videos/${BASENAME}.z* 2>/dev/null | wc -l) parts"
+            else
+              cp "$FILE" "videos/$BASENAME"
+              echo "✅ Copied as-is (no split needed)"
+            fi
+          done
+          rm -rf tmp_downloads
+
+      - name: Stop WARP Container
+        if: always()
+        run: |
+          docker stop warp || true
+          docker rm warp || true
+
+      - name: Commit & Push
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          echo "Preparing to commit files..."
+
+          # Check if videos folder has any files
+          if [ ! -d "videos" ] || [ -z "$(ls -A videos 2>/dev/null)" ]; then
+            echo "❌ No files to commit in videos folder"
+            exit 1
+          fi
+
+          # Collect all new/modified files
+          mapfile -t ALL_FILES < <(find videos -type f -name "*")
+
+          TOTAL=${#ALL_FILES[@]}
+          echo "📦 Total files to push: $TOTAL"
+
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+
+          BATCH_SIZE=5
+          BATCH_NUM=0
+
+          for (( i=0; i<TOTAL; i+=BATCH_SIZE )); do
+            BATCH_NUM=$(( BATCH_NUM + 1 ))
+            BATCH=("${ALL_FILES[@]:i:BATCH_SIZE}")
+
+            echo "🚀 Pushing batch $BATCH_NUM: files $((i+1))–$(( i + ${#BATCH[@]} )) of $TOTAL"
+
+            git add -f "${BATCH[@]}"          # ← اینجا -f اضافه شد
+            git commit -m "YouTube download — batch $BATCH_NUM [skip ci]"
+
+            # Pull with rebase before each push
+            git pull --rebase origin "$BRANCH" || true
+            git push origin HEAD:"$BRANCH"
+
+            echo "✅ Batch $BATCH_NUM pushed"
+          done
+
+          echo "🎉 All $TOTAL files pushed"
