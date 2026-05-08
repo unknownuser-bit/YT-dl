@@ -114,6 +114,9 @@ jobs:
 
       - name: Download YouTube Video
         run: |
+
+          sudo apt install -y ffmpeg
+
           URL="${{ github.event.inputs.youtube_url }}"
           QUALITY="${{ github.event.inputs.quality }}"
           SPLIT_MB="${{ github.event.inputs.split_threshold_mb }}"
