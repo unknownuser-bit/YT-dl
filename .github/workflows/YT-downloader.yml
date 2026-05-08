@@ -35,6 +35,24 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Cache WARP Docker image
+        id: cache-warp
+        uses: actions/cache@v4
+        with:
+          path: warp-image.tar
+          key: warp-image-${{ runner.os }}-v1   # bump 'v1' to 'v2' when you want to refresh
+
+      - name: Load or pull WARP image
+        run: |
+          if [ -f warp-image.tar ]; then
+            echo "🔄 Loading WARP image from cache..."
+            docker load < warp-image.tar
+          else
+            echo "⬇️ Pulling WARP image..."
+            docker pull caomingjun/warp
+            docker save caomingjun/warp -o warp-image.tar
+          fi
+
       - name: Start WARP Container
         run: |
           echo "🚀 Starting Cloudflare WARP container..."
@@ -80,11 +98,22 @@ jobs:
             echo "Response: $FINAL"
           fi
 
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip ffmpeg zip curl jq
-          pip3 install --upgrade yt-dlp
+      - name: Cache APT packages
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: python3-pip ffmpeg zip curl jq
+          version: 1.0
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-ytdlp-v1
+          restore-keys: |
+            pip-${{ runner.os }}-ytdlp-
+
+      - name: Install yt-dlp
+        run: pip3 install --upgrade yt-dlp
 
       - name: Download YouTube Video
         run: |
