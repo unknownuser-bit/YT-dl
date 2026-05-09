@@ -143,63 +143,10 @@ jobs:
           echo "📹 Downloading: $URL"
           echo "📊 Quality: $QUALITY"
 
-          # Set format based on quality
-          case "$QUALITY" in
-            "audio")
-              FORMAT="bestaudio/best"
-              AUDIO_FLAGS="--extract-audio --audio-format mp3"
-              ;;
-            "best")
-              FORMAT="bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-              AUDIO_FLAGS=""
-              ;;
-            "1080")
-              FORMAT="bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best"
-              AUDIO_FLAGS=""
-              ;;
-            "720")
-              FORMAT="bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
-              AUDIO_FLAGS=""
-              ;;
-            "480")
-              FORMAT="bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best"
-              AUDIO_FLAGS=""
-              ;;
-            *)
-              FORMAT="bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-              AUDIO_FLAGS=""
-              ;;
-          esac
-
-          # Download through WARP SOCKS5 proxy
-          yt-dlp \
-            --proxy "socks5://127.0.0.1:1080" \
-            --format "$FORMAT" \
-            $AUDIO_FLAGS \
-            --output "tmp_downloads/%(title)s.%(ext)s" \
-            --no-playlist \
-            --retries 10 \
-            --fragment-retries 10 \
-            --concurrent-fragments 4 \
-            --no-check-certificates \
-            --prefer-free-formats \
-            --no-warnings \
-            "$URL" || {
-              echo "❌ yt-dlp failed, trying alternative method..."
-
-              # Try with different user agent
-              yt-dlp \
-                --proxy "socks5://127.0.0.1:1080" \
-                --format "$FORMAT" \
-                $AUDIO_FLAGS \
-                --output "tmp_downloads/%(title)s.%(ext)s" \
-                --no-playlist \
-                --retries 10 \
-                --fragment-retries 10 \
-                --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-                --extractor-args "youtube:player_client=android" \
-                "$URL"
-            }
+          ./scripts/download_with_ytdl.sh \
+            -o tmp_downloads \
+            -q $QUALITY \
+            -u $URL
 
           echo "✅ Download complete!"
           ls -la tmp_downloads/
@@ -207,20 +154,15 @@ jobs:
           # Handle file splitting
           for FILE in tmp_downloads/*; do
             [ -f "$FILE" ] || continue
-            SIZE=$(stat -c%s "$FILE")
-            BASENAME=$(basename "$FILE")
-
-            echo "📁 Processing: $BASENAME ($(( SIZE / 1024 / 1024 ))MB)"
-
-            if [ "$SPLIT_BYTES" -gt 0 ] && [ "$SIZE" -gt "$SPLIT_BYTES" ]; then
-              echo "✂️ Splitting $BASENAME into ${SPLIT_MB}MB parts..."
-              zip -0 -s "${SPLIT_MB}m" "videos/${BASENAME}.zip" -j "$FILE"
-              echo "✅ Created $(ls videos/${BASENAME}.z* 2>/dev/null | wc -l) parts"
-            else
-              cp "$FILE" "videos/$BASENAME"
-              echo "✅ Copied as-is (no split needed)"
-            fi
+            filename_normalized=$(basename "$FILE" | tr -c '[:alnum:]' _)
+            outdir="videos/$filename_normalized"
+            mkdir "$outdir"
+            ./scripts/partition_file_into_zips.sh \
+              "$FILE" \
+              "$outdir" \
+              "$SPLIT_BYTES"
           done
+
           rm -rf tmp_downloads
 
       - name: Commit & Push
@@ -241,34 +183,15 @@ jobs:
             exit 1
           fi
 
-          # Collect all new/modified files
-          mapfile -t ALL_FILES < <(find videos -type f -name "*")
+          echo "📦 Total files to push: $(find videos -type f | wc -l)"
 
-          TOTAL=${#ALL_FILES[@]}
-          echo "📦 Total files to push: $TOTAL"
-
-          if [ "$TOTAL" -eq 0 ]; then
-            echo "Nothing to commit"
-            exit 0
-          fi
-
-          BATCH_SIZE=5
-          BATCH_NUM=0
-
-          for (( i=0; i<TOTAL; i+=BATCH_SIZE )); do
-            BATCH_NUM=$(( BATCH_NUM + 1 ))
-            BATCH=("${ALL_FILES[@]:i:BATCH_SIZE}")
-
-            echo "🚀 Pushing batch $BATCH_NUM: files $((i+1))–$(( i + ${#BATCH[@]} )) of $TOTAL"
-
-            git add -f "${BATCH[@]}"          # ← اینجا -f اضافه شد
-            git commit -m "YouTube download — batch $BATCH_NUM [skip ci]"
+          for dir in $(find videos -mindepth 1 -maxdepth 1 -type d); do
+            git add -f $dir # ← اینجا -f اضافه شد
+            echo commiting $dir
+            git commit -m "YT-DL: $dir"
 
             # Pull with rebase before each push
-            git pull --rebase origin "$BRANCH" || true
-            git push origin HEAD:"$BRANCH"
-
-            echo "✅ Batch $BATCH_NUM pushed"
+            git push --set-upstream origin HEAD:"$BRANCH"
           done
 
           echo "🎉 All $TOTAL files pushed"
