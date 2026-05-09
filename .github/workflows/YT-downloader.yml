@@ -1,4 +1,4 @@
-name: 01- 🎬 Youtube Downloader 
+name: 01- 🎬 Youtube Downloader
 
 on:
   workflow_dispatch:
@@ -89,11 +89,7 @@ jobs:
       - name: Start WARP Container
         run: |
           echo "🚀 Starting Cloudflare WARP container..."
-
-          # Create docker network
           docker network create warp-net || true
-
-          # Run WARP container
           docker run -d \
             --name warp \
             --restart=always \
@@ -104,10 +100,7 @@ jobs:
             --sysctl net.ipv4.conf.all.src_valid_mark=1 \
             -v warp-data:/var/lib/cloudflare-warp \
             caomingjun/warp
-
           echo "⏳ Waiting for WARP to initialize (30 seconds)..."
-
-          # Check WARP status
           echo "🔍 Checking WARP status..."
           for i in {1..30}; do
             sleep 1
@@ -118,8 +111,6 @@ jobs:
               break
             fi
           done
-
-          # Final check
           FINAL=$(curl -s --max-time 10 --socks5-hostname 127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace 2>/dev/null || echo "failed")
           if echo "$FINAL" | grep -qE "warp=(on|plus)"; then
             echo "✅ WARP proxy is ready!"
@@ -131,7 +122,6 @@ jobs:
 
       - name: Download YouTube Video
         run: |
-
           URL="${{ github.event.inputs.youtube_url }}"
           QUALITY="${{ github.event.inputs.quality }}"
           SPLIT_MB="${{ github.event.inputs.split_threshold_mb }}"
@@ -151,7 +141,6 @@ jobs:
           echo "✅ Download complete!"
           ls -la tmp_downloads/
 
-          # Handle file splitting
           for FILE in tmp_downloads/*; do
             [ -f "$FILE" ] || continue
             filename_normalized=$(basename "$FILE" | tr -c '[:alnum:]' _)
@@ -162,7 +151,6 @@ jobs:
               "$outdir" \
               "$SPLIT_BYTES"
           done
-
           rm -rf tmp_downloads
 
       - name: Commit & Push
@@ -174,7 +162,6 @@ jobs:
           fi
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-
           echo "Preparing to commit files..."
 
           # Check if videos folder has any files
