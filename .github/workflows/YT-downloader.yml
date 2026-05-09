@@ -53,6 +53,39 @@ jobs:
             docker save caomingjun/warp -o warp-image.tar
           fi
 
+      - name: Cache apt packages
+        id: cache-apt
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-cache
+          key: apt-packages-${{ runner.os }}-v1
+
+      - name: Install all packages
+        run: |
+          if [ -d ~/apt-cache ]; then
+            echo "📦 Using cached apt packages..."
+            sudo cp ~/apt-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+          fi
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg python3-pip zip curl jq
+
+          # Cache the debs for next time
+          mkdir -p ~/apt-cache
+          sudo cp /var/cache/apt/archives/*.deb ~/apt-cache/
+          sudo chmod 644 ~/apt-cache/*.deb
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-ytdlp-v1
+          restore-keys: |
+            pip-${{ runner.os }}-ytdlp-
+
+      - name: Install yt-dlp
+        run: pip3 install --upgrade yt-dlp
+
       - name: Start WARP Container
         run: |
           echo "🚀 Starting Cloudflare WARP container..."
@@ -95,38 +128,6 @@ jobs:
             echo "Response: $FINAL"
           fi
 
-      - name: Cache apt packages
-        id: cache-apt
-        uses: actions/cache@v4
-        with:
-          path: ~/apt-cache
-          key: apt-packages-${{ runner.os }}-v1
-
-      - name: Install all packages
-        run: |
-          if [ -d ~/apt-cache ]; then
-            echo "📦 Using cached apt packages..."
-            sudo cp ~/apt-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
-          fi
-          
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg python3-pip zip curl jq
-          
-          # Cache the debs for next time
-          mkdir -p ~/apt-cache
-          sudo cp /var/cache/apt/archives/*.deb ~/apt-cache/
-          sudo chmod 644 ~/apt-cache/*.deb
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-ytdlp-v1
-          restore-keys: |
-            pip-${{ runner.os }}-ytdlp-
-
-      - name: Install yt-dlp
-        run: pip3 install --upgrade yt-dlp
 
       - name: Download YouTube Video
         run: |
