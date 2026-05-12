@@ -1,0 +1,1 @@
+pyinstaller --onefile --paths ./src --collect-submodules src --add-binary "bin\\gh.exe;bin" --noconsole main.py
