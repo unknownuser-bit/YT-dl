@@ -148,7 +148,7 @@ jobs:
       - name: Commit & Push
         run: |
           if [ "${{ github.event.inputs.save_in_new_branch }}" == "true" ]; then
-            BRANCH="$(date | tr -c '[:alnum:]' '_')_$(ls -la videos| sha1sum | cut -f 1 -d ' ')"
+            BRANCH="$(date "+%Y.%m.%d.%M.%S")_$(ls -la videos| sha1sum | cut -f 1 -d ' ')"
             git checkout -b $BRANCH
           else
             BRANCH="${GITHUB_REF_NAME}"
