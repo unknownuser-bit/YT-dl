@@ -53,6 +53,33 @@ jobs:
             docker save caomingjun/warp -o warp-image.tar
           fi
 
+      - name: Start WARP Container
+        run: |
+          echo "🚀 Starting Cloudflare WARP container..."
+          docker network create warp-net || true
+          docker run -d \
+            --name warp \
+            --restart=always \
+            --network warp-net \
+            -p 1080:1080 \
+            --cap-add NET_ADMIN \
+            --sysctl net.ipv6.conf.all.disable_ipv6=0 \
+            --sysctl net.ipv4.conf.all.src_valid_mark=1 \
+            -v warp-data:/var/lib/cloudflare-warp \
+            caomingjun/warp
+
+          echo "⏳ Waiting for WARP to initialize (30 seconds)..."
+          echo "🔍 Checking WARP status..."
+
+          ./scripts/block_untill_local_warp_is_active.sh
+          err=$?
+
+          if [[ $err == 0 ]]; then
+            echo "✅ WARP proxy is ready!"
+          else
+            echo "⚠️ WARP might not be fully active, but continuing anyway..."
+          fi
+
       - name: Cache apt packages
         id: cache-apt
         uses: actions/cache@v4
@@ -85,34 +112,6 @@ jobs:
 
       - name: Install yt-dlp
         run: pip3 install --upgrade yt-dlp
-
-      - name: Start WARP Container
-        run: |
-          echo "🚀 Starting Cloudflare WARP container..."
-          docker network create warp-net || true
-          docker run -d \
-            --name warp \
-            --restart=always \
-            --network warp-net \
-            -p 1080:1080 \
-            --cap-add NET_ADMIN \
-            --sysctl net.ipv6.conf.all.disable_ipv6=0 \
-            --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-            -v warp-data:/var/lib/cloudflare-warp \
-            caomingjun/warp
-
-          echo "⏳ Waiting for WARP to initialize (30 seconds)..."
-          echo "🔍 Checking WARP status..."
-
-          ./scripts/block_untill_local_warp_is_active.sh
-          err=$?
-
-          if [[ $err == 0 ]]; then
-            echo "✅ WARP proxy is ready!"
-          else
-            echo "⚠️ WARP might not be fully active, but continuing anyway..."
-          fi
-
 
       - name: Download YouTube Video
         run: |
